@@ -1,4 +1,3 @@
 /model/data
-**/.venv/
-build
-installer
+build/
+.venv/

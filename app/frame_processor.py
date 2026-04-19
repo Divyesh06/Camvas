@@ -12,28 +12,62 @@ def set_tool(new_tool):
 import cv2
 import numpy as np
 import mediapipe as mp
+from mediapipe.tasks import python as mp_tasks
+from mediapipe.tasks.python import vision as mp_vision
+
+
 import time
 import sys
 import onnxruntime as ort
 import os
 import math
 import threading
-import keyboard  # You'll need to install this: pip install keyboard
+#import keyboard  # You'll need to install this: pip install keyboard
 def is_frozen():
     return getattr(sys, 'frozen', False)
 
 if not is_frozen():
-    model_path = "../model/ShapeDetection.onnx"
+    model_path = "model/ShapeDetection.onnx"
+    hand_model_path = "model/hand_landmarker.task"
 else:
     app_dir = os.path.dirname(sys.executable)
     model_path = os.path.join(app_dir, 'model', 'ShapeDetection.onnx')
+    hand_model_path = os.path.join(app_dir, 'model', 'hand_landmarker.task')
 
 onnx_session = ort.InferenceSession(model_path)
 input_name = onnx_session.get_inputs()[0].name
 
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
-hands = mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.5)
+THUMB_TIP = 4
+INDEX_FINGER_TIP = 8
+
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (17, 18), (18, 19), (19, 20),
+    (0, 17),
+]
+
+_hand_detector = mp_vision.HandLandmarker.create_from_options(
+    mp_vision.HandLandmarkerOptions(
+        base_options=mp_tasks.BaseOptions(model_asset_path=hand_model_path),
+        running_mode=mp_vision.RunningMode.VIDEO,
+        num_hands=2,
+        min_hand_detection_confidence=0.7,
+        min_tracking_confidence=0.5,
+    )
+)
+_last_video_ts_ms = -1
+
+
+def draw_hand_landmarks(frame, landmarks):
+    h, w = frame.shape[:2]
+    pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+    for a, b in HAND_CONNECTIONS:
+        cv2.line(frame, pts[a], pts[b], (255, 255, 255), 2)
+    for p in pts:
+        cv2.circle(frame, p, 3, (0, 0, 255), -1)
 
 # Global variables
 canvas = None
@@ -83,11 +117,11 @@ def init_state(frame_shape):
     move_start_pos = None
     
     # Set up keyboard event listener
-    start_keyboard_listener()
+  #  start_keyboard_listener()
 
 def index_thumb_close(hand_landmarks):
-    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+    index_tip = hand_landmarks[INDEX_FINGER_TIP]
+    thumb_tip = hand_landmarks[THUMB_TIP]
     distance = np.sqrt((index_tip.x - thumb_tip.x) ** 2 + (index_tip.y - thumb_tip.y) ** 2)
     return distance < 0.04
 
@@ -344,6 +378,7 @@ def process_frame(frame, flip=False):
     global canvas, last_time, draw_cooldown_threshold, thickness
     global init, drawing, permanent_canvas, last_x, last_y
     global tool, selected_shape_idx, is_moving_shape, move_start_pos
+    global _last_video_ts_ms
 
     if not init:
         init_state(frame.shape)
@@ -355,20 +390,25 @@ def process_frame(frame, flip=False):
         frame = cv2.flip(frame, 1)
 
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(rgb_frame)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+    ts_ms = int(time.monotonic() * 1000)
+    if ts_ms <= _last_video_ts_ms:
+        ts_ms = _last_video_ts_ms + 1
+    _last_video_ts_ms = ts_ms
+    results = _hand_detector.detect_for_video(mp_image, ts_ms)
 
     # Add key instructions to the frame
-    cv2.putText(frame, f"Tool: {tool} (Press 'd' for Draw, 's' for Select)", (10, 30), 
+    cv2.putText(frame, f"Tool: {tool} (Press 'd' for Draw, 's' for Select)", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
 
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
+    if results.hand_landmarks:
+        for hand_landmarks in results.hand_landmarks:
             # Display hand landmarks
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            draw_hand_landmarks(frame, hand_landmarks)
 
             # Get finger positions
-            index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-            thumb_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+            index_finger_tip = hand_landmarks[INDEX_FINGER_TIP]
+            thumb_finger_tip = hand_landmarks[THUMB_TIP]
             index_x, index_y = int(index_finger_tip.x * frame.shape[1]), int(index_finger_tip.y * frame.shape[0])
             thumb_x, thumb_y = int(thumb_finger_tip.x * frame.shape[1]), int(thumb_finger_tip.y * frame.shape[0])
 

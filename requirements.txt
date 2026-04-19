@@ -1,0 +1,7 @@
+PyQt5
+mediapipe
+opencv-python
+onnxruntime
+cx_Freeze
+poethepoet
+

@@ -1,0 +1,10 @@
+[tool.poe.tasks]
+dev = "python app/main.py"
+build = "python setup/cx_build_app.py build_exe"
+
+installer = "python setup/run_inno.py"
+
+release = [
+  "build",
+  "installer"
+]

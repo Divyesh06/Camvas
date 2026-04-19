@@ -1,0 +1,6 @@
+README.md
+pyproject.toml
+Camvas.egg-info/PKG-INFO
+Camvas.egg-info/SOURCES.txt
+Camvas.egg-info/dependency_links.txt
+Camvas.egg-info/top_level.txt
