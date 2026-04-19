@@ -1,7 +1,6 @@
 PyQt5
-mediapipe
 opencv-python
 onnxruntime
+mediapipe
 cx_Freeze
 poethepoet
-

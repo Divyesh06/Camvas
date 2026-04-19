@@ -28,7 +28,7 @@ def draw_handdrawn_line(img, pt1, pt2, thickness=2, color=(255, 255, 255), wobbl
     for i in range(len(points) - 1):
         cv2.line(img, points[i], points[i+1], color, thickness, lineType=cv2.LINE_AA)
 
-def generate_lines(output_dir="data/line", num=100000):
+def generate_lines(output_dir="data/line", num=100):
     os.makedirs(output_dir, exist_ok=True)
     for i in range(num):
         img = np.zeros((128, 128, 3), dtype=np.uint8)

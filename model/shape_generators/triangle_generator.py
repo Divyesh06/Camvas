@@ -33,7 +33,7 @@ def draw_triangle(img, pt1, pt2, pt3):
     draw_handdrawn_line(img, pt2, pt3, wobble=1.2)
     draw_handdrawn_line(img, pt3, pt1, wobble=1.2)
 
-def generate_triangles(output_dir="data/triangle", num=100000):
+def generate_triangles(output_dir="data/triangle", num=100):
     os.makedirs(output_dir, exist_ok=True)
     for i in range(num):
         img = np.zeros((128, 128, 3), dtype=np.uint8)

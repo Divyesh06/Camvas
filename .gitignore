@@ -1,3 +1,4 @@
 /model/data
 build/
 .venv/
+Camvas.egg-info/

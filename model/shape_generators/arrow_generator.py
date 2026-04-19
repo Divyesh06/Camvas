@@ -47,7 +47,7 @@ def crop_and_resize(img, size=(28, 28)):
 
     return final_img
 
-def generate_arrow_dataset(output_dir="data/arrow", num_images=100000):
+def generate_arrow_dataset(output_dir="data/arrow", num_images=100):
     os.makedirs(output_dir, exist_ok=True)
     for i in range(num_images):
         canvas = np.zeros((128, 128, 3), dtype=np.uint8)  # Black background

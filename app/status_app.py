@@ -11,7 +11,7 @@ def is_frozen():
     return getattr(sys, 'frozen', False)
 
 if not is_frozen():
-    icon_path = "Camvas.ico"
+    icon_path = "assets/Camvas.ico"
 else:
     app_dir = os.path.dirname(sys.executable)
     icon_path = os.path.join(app_dir, 'Camvas.ico')
@@ -149,12 +149,13 @@ class CustomWindow(QWidget):
         self.main_layout.addWidget(self.content)
 
     def toggle_state(self):
-        if self.state == "started" or self.state == "stopped":
+        if self.state == "started":
+            new_state = "stopped"
+        elif self.state == "stopped":
             new_state = "waiting"
         elif self.state == "waiting":
             new_state = "stopped"
-        
-       
+
         self.set_state(new_state)
 
     def set_state(self, state):

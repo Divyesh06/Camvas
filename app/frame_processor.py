@@ -1,28 +1,14 @@
-
-# We'll keep this function for external use but it won't be triggered by gestures
-def set_tool(new_tool):
-    """Set the current tool to either 'draw' or 'select'"""
-    global tool
-    if new_tool in ['draw', 'select']:
-        tool = new_tool
-        print(f"Tool set to: {tool}")
-    else:
-        print(f"Invalid tool: {new_tool}. Use 'draw' or 'select'.")
-        
 import cv2
 import numpy as np
+import time
+import sys
+import onnxruntime as ort
+import os
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
 
-import time
-import sys
-import onnxruntime as ort
-import os
-import math
-import threading
-#import keyboard  # You'll need to install this: pip install keyboard
 def is_frozen():
     return getattr(sys, 'frozen', False)
 
@@ -71,6 +57,7 @@ def draw_hand_landmarks(frame, landmarks):
 
 # Global variables
 canvas = None
+canvas_dirty = False
 permanent_canvas = None
 undo = []
 redo = []
@@ -90,15 +77,28 @@ selected_shape_idx = None  # Index of currently selected shape
 is_moving_shape = False  # Flag to track if we're currently moving a shape
 move_start_pos = None  # Starting position for shape movement
 
+_frame_counter = 0
+_last_results = []
+
+UNDO_LIMIT = 20
+
+
+def _push_undo():
+    undo.append(permanent_canvas.copy())
+    if len(undo) > UNDO_LIMIT:
+        del undo[0]
+
 
 def init_state(frame_shape):
     """Initializes or resets all global variables to a clean state."""
-    global canvas, permanent_canvas, undo, redo
+    global canvas, canvas_dirty, permanent_canvas, undo, redo
     global init, drawing, last_x, last_y
     global draw_cooldown_threshold, undo_cooldown_threshold
     global tool, shapes, selected_shape_idx, is_moving_shape, move_start_pos
+    global _frame_counter, _last_results
 
     canvas = np.zeros(frame_shape, dtype=np.uint8)
+    canvas_dirty = False
     permanent_canvas = np.zeros(frame_shape, dtype=np.uint8)
     undo = [permanent_canvas.copy()]
     redo = []
@@ -115,10 +115,11 @@ def init_state(frame_shape):
     selected_shape_idx = None
     is_moving_shape = False
     move_start_pos = None
-    
-    # Set up keyboard event listener
-  #  start_keyboard_listener()
 
+    _frame_counter = 0
+    _last_results = []
+  
+  
 def index_thumb_close(hand_landmarks):
     index_tip = hand_landmarks[INDEX_FINGER_TIP]
     thumb_tip = hand_landmarks[THUMB_TIP]
@@ -174,7 +175,7 @@ def correct_image(image, shape):
     # Add shape to our list of shapes
     shapes.append(new_shape)
     
-    undo.append(permanent_canvas.copy())
+    _push_undo()
     redo.clear()
 
 def find_extreme_non_zero_points(img):
@@ -322,7 +323,7 @@ def move_shape(shape_idx, offset):
     # Redraw all shapes on the clean canvas
     redraw_all_shapes()
     
-    undo.append(permanent_canvas.copy())
+    _push_undo()
 
 def redraw_all_shapes():
     """Redraw all shapes on the permanent canvas"""
@@ -351,34 +352,11 @@ def redraw_all_shapes():
             p1, p2 = shape['points']
             cv2.line(permanent_canvas, p1, p2, (255, 0, 0), 5)
 
-# Set up keyboard event for tool switching
-def setup_keyboard_events():
-    """Set up keyboard event listener for tool switching"""
-    keyboard.add_hotkey('s', lambda: set_tool('select'))
-    keyboard.add_hotkey('d', lambda: set_tool('draw'))
-    print("Keyboard shortcuts enabled: Press 's' for Select mode, 'd' for Draw mode")
-
-# Start keyboard listener in a separate thread
-def start_keyboard_listener():
-    """Start keyboard listener in a separate thread"""
-    try:
-        # Create and start keyboard listener thread
-        keyboard_thread = threading.Thread(target=keyboard.wait)
-        keyboard_thread.daemon = True  # Thread will close when main program exits
-        keyboard_thread.start()
-        setup_keyboard_events()
-    except Exception as e:
-        print(f"Error setting up keyboard listener: {e}")
-        print("Tool switching via keyboard will not be available.")
-
-# Call this function at the beginning of your main loop/program
-# start_keyboard_listener()
-
 def process_frame(frame, flip=False):
-    global canvas, last_time, draw_cooldown_threshold, thickness
+    global canvas, canvas_dirty, last_time, draw_cooldown_threshold, thickness
     global init, drawing, permanent_canvas, last_x, last_y
     global tool, selected_shape_idx, is_moving_shape, move_start_pos
-    global _last_video_ts_ms
+    global _frame_counter, _last_results, _last_video_ts_ms
 
     if not init:
         init_state(frame.shape)
@@ -389,22 +367,22 @@ def process_frame(frame, flip=False):
     if flip:
         frame = cv2.flip(frame, 1)
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-    ts_ms = int(time.monotonic() * 1000)
-    if ts_ms <= _last_video_ts_ms:
-        ts_ms = _last_video_ts_ms + 1
-    _last_video_ts_ms = ts_ms
-    results = _hand_detector.detect_for_video(mp_image, ts_ms)
+    if _frame_counter % 2 == 0:
+        detect_frame = cv2.resize(frame, (640, 360))
+        rgb_frame = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        ts_ms = int(time.monotonic() * 1000)
+        if ts_ms <= _last_video_ts_ms:
+            ts_ms = _last_video_ts_ms + 1
+        _last_video_ts_ms = ts_ms
+        _last_results = _hand_detector.detect_for_video(mp_image, ts_ms).hand_landmarks
+    results = _last_results
+    _frame_counter += 1
 
-    # Add key instructions to the frame
-    cv2.putText(frame, f"Tool: {tool} (Press 'd' for Draw, 's' for Select)", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-
-    if results.hand_landmarks:
-        for hand_landmarks in results.hand_landmarks:
+    if results:
+        for hand_landmarks in results:
             # Display hand landmarks
-            draw_hand_landmarks(frame, hand_landmarks)
+            #draw_hand_landmarks(frame, hand_landmarks)
 
             # Get finger positions
             index_finger_tip = hand_landmarks[INDEX_FINGER_TIP]
@@ -430,6 +408,7 @@ def process_frame(frame, flip=False):
                     if drawing:
                         if last_x is not None and last_y is not None:
                             cv2.line(canvas, (last_x, last_y), (x, y), (255, 0, 0), thickness=thickness)
+                            canvas_dirty = True
                         last_x, last_y = x, y
                     else:
                         last_x, last_y = None, None
@@ -479,18 +458,19 @@ def process_frame(frame, flip=False):
     # Process drawing completion
     if tool == 'draw' and not drawing:
         last_x, last_y = None, None
-        if np.count_nonzero(canvas):
+        if canvas_dirty:
 
             pred_probab, pred_class = keras_predict(canvas)
 
             pred_shape = ['square', 'circle', 'triangle', 'line', 'unknown'][int(pred_class)]
-            
+
             if pred_probab >= 0.99 and pred_shape != 'unknown':
                 correct_image(canvas, pred_shape)
             else:
                 permanent_canvas = cv2.addWeighted(permanent_canvas, 1, canvas, 1, 0)
-                undo.append(permanent_canvas.copy())
-            canvas = np.zeros_like(frame)
+                _push_undo()
+            canvas[:] = 0
+            canvas_dirty = False
             thickness = None
 
     # Highlight selected shape
@@ -508,3 +488,13 @@ def process_frame(frame, flip=False):
     frame = cv2.addWeighted(frame, 1, permanent_canvas, 1, 0)
 
     return frame
+
+
+def set_tool(new_tool):
+    """Set the current tool to either 'draw' or 'select'"""
+    global tool
+    if new_tool in ['draw', 'select']:
+        tool = new_tool
+        print(f"Tool set to: {tool}")
+    else:
+        print(f"Invalid tool: {new_tool}. Use 'draw' or 'select'.")

@@ -36,7 +36,7 @@ def crop_and_resize(img, size=(28, 28)):
     final[y_offset:y_offset+resized.shape[0], x_offset:x_offset+resized.shape[1]] = resized
     return final
 
-def generate_circles(output_dir="data/circle", num=100000):
+def generate_circles(output_dir="data/circle", num=100):
     os.makedirs(output_dir, exist_ok=True)
     for i in range(num):
         img = np.zeros((128, 128, 3), dtype=np.uint8)
