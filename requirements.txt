@@ -6,6 +6,7 @@ cx_Freeze
 poethepoet
 tqdm
 numpy
+keyboard
 tensorflow
 scikit-learn
 tensorboard

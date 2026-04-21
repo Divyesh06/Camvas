@@ -5,7 +5,7 @@ import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
-classes = ['square', 'circle', 'triangle', 'line']
+classes = ['square', 'circle', 'triangle', 'line', 'arrow']
 x_load = []
 y_load = []
 

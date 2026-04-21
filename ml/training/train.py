@@ -15,7 +15,7 @@ from tensorflow.keras.callbacks import (
     ReduceLROnPlateau,
 )
 
-CLASSES = ['square', 'circle', 'triangle', 'line']
+CLASSES = ['square', 'circle', 'triangle', 'line', 'arrow']
 NUM_CLASSES = len(CLASSES)
 IMAGE_SIZE = 28
 MODEL_PATH = "ml/models/ShapeDetection.keras"
