@@ -13,12 +13,12 @@ def is_frozen():
     return getattr(sys, 'frozen', False)
 
 if not is_frozen():
-    model_path = "model/ShapeDetection.onnx"
-    hand_model_path = "model/hand_landmarker.task"
+    model_path = "ml/models/ShapeDetection.onnx"
+    hand_model_path = "ml/models/hand_landmarker.task"
 else:
     app_dir = os.path.dirname(sys.executable)
-    model_path = os.path.join(app_dir, 'model', 'ShapeDetection.onnx')
-    hand_model_path = os.path.join(app_dir, 'model', 'hand_landmarker.task')
+    model_path = os.path.join(app_dir, 'models', 'ShapeDetection.onnx')
+    hand_model_path = os.path.join(app_dir, 'models', 'hand_landmarker.task')
 
 onnx_session = ort.InferenceSession(model_path)
 input_name = onnx_session.get_inputs()[0].name
@@ -136,7 +136,7 @@ def keras_predict(image):
     pred_probab = onnx_session.run(None, {input_name: processed})[0][0]
     pred_class = int(np.argmax(pred_probab))
     
-    shape_classes = ['square', 'circle', 'triangle', 'line', 'unknown']
+    shape_classes = ['square', 'circle', 'triangle', 'line']
     confidence = float(np.max(pred_probab))
 
     print(f"I am {confidence * 100:.2f}% sure that this is a {shape_classes[pred_class]}")
@@ -192,19 +192,35 @@ def find_extreme_non_zero_points(img):
     return leftmost, topmost, rightmost, bottommost, center
 
 def keras_process_image(img):
-    img = auto_crop(img)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img = cv2.resize(img, (28, 28))
-    img = np.array(img, dtype=np.float32)
-    img = np.reshape(img, (-1, 28, 28, 1))
-    return img
+    """Match training preprocessing: binarize, aspect-preserving resize,
+    center-pad to 28x28, normalize to [0, 1].
 
-def auto_crop(img):
-    non_zero_rows = np.any(img != 0, axis=(1, 2))
-    non_zero_cols = np.any(img != 0, axis=(0, 2))
-    row_start, row_end = np.where(non_zero_rows)[0][[0, -1]]
-    col_start, col_end = np.where(non_zero_cols)[0][[0, -1]]
-    return img[row_start:row_end + 1, col_start:col_end + 1]
+    Binarization makes the model invariant to the blue drawing color — any
+    non-zero pixel becomes a stroke pixel, the same representation training saw.
+    """
+    target = 28
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY)
+
+    coords = cv2.findNonZero(binary)
+    if coords is None:
+        return np.zeros((1, target, target, 1), dtype=np.float32)
+
+    x, y, w, h = cv2.boundingRect(coords)
+    cropped = binary[y:y + h, x:x + w]
+
+    scale = min(target / w, target / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    resized = cv2.resize(cropped, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    padded = np.zeros((target, target), dtype=np.uint8)
+    y_off = (target - new_h) // 2
+    x_off = (target - new_w) // 2
+    padded[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+
+    normalized = padded.astype(np.float32) / 255.0
+    return normalized.reshape(1, target, target, 1)
 
 def undo_canvas():
     global permanent_canvas, shapes
@@ -462,9 +478,9 @@ def process_frame(frame, flip=False):
 
             pred_probab, pred_class = keras_predict(canvas)
 
-            pred_shape = ['square', 'circle', 'triangle', 'line', 'unknown'][int(pred_class)]
+            pred_shape = ['square', 'circle', 'triangle', 'line'][int(pred_class)]
 
-            if pred_probab >= 0.99 and pred_shape != 'unknown':
+            if pred_probab >= 0.8:
                 correct_image(canvas, pred_shape)
             else:
                 permanent_canvas = cv2.addWeighted(permanent_canvas, 1, canvas, 1, 0)

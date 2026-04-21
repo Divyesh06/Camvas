@@ -82,7 +82,6 @@ def main(started_callback, disconnected_callback=None):
             frame_count = 0
             fps_start = time.time()
 
-    print("Camera disconnected")
     was_stopped = stop_signal
     cap.release()
     cam.delete()
@@ -101,4 +100,3 @@ def main(started_callback, disconnected_callback=None):
 
 if __name__ == "__main__":
     main(lambda: None)
-

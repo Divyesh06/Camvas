@@ -4,3 +4,10 @@ onnxruntime
 mediapipe
 cx_Freeze
 poethepoet
+tqdm
+numpy
+tensorflow
+scikit-learn
+tensorboard
+tf2onnx
+#For training of models

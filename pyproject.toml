@@ -1,3 +1,8 @@
+[project]
+requires-python = "==3.12.*"
+name = "Camvas"
+version = "1.0"
+
 [tool.poe.tasks]
 dev = "python app/main.py"
 build = "python setup/cx_build_app.py build_exe"
@@ -7,4 +12,20 @@ installer = "python setup/run_inno.py"
 release = [
   "build",
   "installer"
+]
+
+generate_shapes = "python ml/training/shape_generators.py"
+generate_features = "python ml/training/features_labels_generator.py"
+
+generate_dataset = [
+  "generate_shapes",
+  "generate_features"
+]
+
+train_model = "python ml/training/train.py"
+convert_model = "python ml/training/convert_to_onxx.py"
+
+train = [
+  "train_model",
+  "convert_model"
 ]

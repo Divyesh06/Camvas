@@ -1,4 +1,4 @@
-/model/data
+/ml/data
 build/
 .venv/
 Camvas.egg-info/
