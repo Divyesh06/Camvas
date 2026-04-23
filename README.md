@@ -23,7 +23,7 @@ Every webcam frame flows through a small pipeline of layers:
 
 Prebuilt installer (Windows):
 
-[**Download the latest release**](https://github.com/placeholder/camvas/releases/latest)
+[**Download the latest release**](https://github.com/Divyesh06/Camvas/releases/latest)
 
 ## Features
 
