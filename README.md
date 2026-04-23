@@ -37,8 +37,9 @@ Prebuilt installer (Windows):
 
 **Prerequisites**
 
-Download uv from [https://github.com/astral-sh/uv](https://github.com/astral-sh/uv)
-
+* Download uv from [https://github.com/astral-sh/uv](https://github.com/astral-sh/uv)
+* Download Inno Setup Compiler from [https://jrsoftware.org/isdl.php](https://jrsoftware.org/isdl.php)
+* Download Python 3.12
 
 ```bash
 git clone https://github.com/Divyesh06/Camvas.git
