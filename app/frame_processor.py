@@ -26,14 +26,7 @@ input_name = onnx_session.get_inputs()[0].name
 THUMB_TIP = 4
 INDEX_FINGER_TIP = 8
 
-HAND_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 4),
-    (0, 5), (5, 6), (6, 7), (7, 8),
-    (5, 9), (9, 10), (10, 11), (11, 12),
-    (9, 13), (13, 14), (14, 15), (15, 16),
-    (13, 17), (17, 18), (18, 19), (19, 20),
-    (0, 17),
-]
+
 
 _hand_detector = mp_vision.HandLandmarker.create_from_options(
     mp_vision.HandLandmarkerOptions(
@@ -45,15 +38,6 @@ _hand_detector = mp_vision.HandLandmarker.create_from_options(
     )
 )
 _last_video_ts_ms = -1
-
-
-def draw_hand_landmarks(frame, landmarks):
-    h, w = frame.shape[:2]
-    pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
-    for a, b in HAND_CONNECTIONS:
-        cv2.line(frame, pts[a], pts[b], (255, 255, 255), 2)
-    for p in pts:
-        cv2.circle(frame, p, 3, (0, 0, 255), -1)
 
 # Global variables
 canvas = None
@@ -83,8 +67,43 @@ _buttons = []
 _pending_undo = False
 _pending_tool_toggle = False
 _pending_clear_all = False
+_pending_color_cycle = False
 
 UNDO_LIMIT = 20
+
+# Drawing colours (BGR). Pure black would be invisible against the
+# additive blend into `frame` (and would drop out of the non-zero scan in
+# find_extreme_non_zero_points), so "black" is a near-black that renders
+# as black but registers as a stroke.
+DRAW_COLORS = [
+    ("red",    (0, 0, 255)),
+    ("white",  (255, 255, 255)),
+    ("black",  (20, 20, 20)),
+    ("blue",   (255, 0, 0)),
+    ("green",  (0, 200, 0)),
+    ("yellow", (0, 220, 220)),
+   
+]
+_color_idx = 0
+
+
+def get_draw_color():
+    return DRAW_COLORS[_color_idx][1]
+
+
+def _cycle_color():
+    global _color_idx
+    _color_idx = (_color_idx + 1) % len(DRAW_COLORS)
+
+# Exponential smoothing factor for drawn strokes. Each new point is blended
+# against the last one as `new = a * raw + (1 - a) * last`. Lower values =
+# smoother strokes at the cost of more lag behind the finger.
+STROKE_SMOOTH_ALPHA = 0.5
+
+# Opacity of strokes when composited onto the video frame. 1.0 = fully
+# opaque replacement, 0.5 = half-transparent blend, etc. Lower values
+# will let the video show through.
+STROKE_OPACITY = 0.9
 
 
 def _request_undo():
@@ -109,11 +128,17 @@ def _request_clear_all():
     _pending_clear_all = True
 
 
+def _request_color_cycle():
+    global _pending_color_cycle
+    _pending_color_cycle = True
+
+
 try:
     import keyboard as _keyboard
     _keyboard.add_hotkey('ctrl+c+z', _request_undo, suppress=False)
     _keyboard.add_hotkey('ctrl+c+s', _request_tool_toggle, suppress=False)
     _keyboard.add_hotkey('ctrl+c+x', _request_clear_all, suppress=False)
+    _keyboard.add_hotkey('ctrl+c+v', _request_color_cycle, suppress=False)
 except Exception as _e:
     print(f"Keyboard hotkeys unavailable: {_e}")
 
@@ -134,6 +159,27 @@ def _draw_pill(target, center, width, height, color, alpha):
     cv2.rectangle(target, (x1 + r, y1), (x2 - r, y2), bgra, -1, lineType=cv2.LINE_AA)
     cv2.circle(target, (x1 + r, center[1]), r, bgra, -1, lineType=cv2.LINE_AA)
     cv2.circle(target, (x2 - r, center[1]), r, bgra, -1, lineType=cv2.LINE_AA)
+
+
+def _overlay_strokes(frame, layer, opacity):
+    """Overlay a BGR stroke layer onto a BGR frame at the given opacity.
+
+    opacity=1.0 replaces frame pixels with layer pixels (fully opaque).
+    0 < opacity < 1 alpha-blends. Only non-zero-colour pixels in `layer`
+    are touched, so the rest of the video is untouched.
+    """
+    if opacity <= 0:
+        return
+    mask = layer.any(axis=2)
+    if not mask.any():
+        return
+    if opacity >= 1.0:
+        frame[mask] = layer[mask]
+        return
+    a = float(opacity)
+    lp = layer[mask].astype(np.float32)
+    fp = frame[mask].astype(np.float32)
+    frame[mask] = (a * lp + (1 - a) * fp).astype(np.uint8)
 
 
 def _composite_bgra(frame_bgr, ui_bgra):
@@ -232,7 +278,11 @@ class HoldButton:
 
         fg = _bgra(_foreground_color(self.progress), 1.0)
         icon_size = self.height - 22
-        icon_cx = self.center[0] - self.width // 2 + icon_size // 2 + 14
+        if self.label:
+            icon_cx = self.center[0] - self.width // 2 + icon_size // 2 + 14
+        else:
+            # Icon-only button: center the icon in the pill.
+            icon_cx = self.center[0]
         icon_cy = self.center[1]
         if self.icon is not None:
             self.icon(target, (icon_cx, icon_cy), icon_size, fg)
@@ -346,6 +396,19 @@ def _clear_icon(target, center, size, color=(240, 240, 240)):
              color, 2, lineType=cv2.LINE_AA)
 
 
+def _color_icon(target, center, size, _fg=None):
+    """Filled circle in the currently selected drawing colour.
+
+    Ignores the passed `_fg` (button foreground) — the whole point of this
+    icon is to reflect the selected draw colour.
+    """
+    r = size // 2 - 1
+    swatch = (*get_draw_color(), 255)
+    cv2.circle(target, center, r, swatch, -1, lineType=cv2.LINE_AA)
+    # Dark ring so white/yellow swatches stay visible on light button bg.
+    cv2.circle(target, center, r, (30, 30, 30, 255), 1, lineType=cv2.LINE_AA)
+
+
 def _pencil_icon(target, center, size, color=(240, 240, 240)):
     """Pencil at 45°: thick shaft with a filled pointed tip."""
     s = size // 2
@@ -435,6 +498,15 @@ def _init_buttons(frame_shape):
         x += bw + gap
 
     _buttons.clear()
+    # Colour-cycle button: icon-only pill in the top-left corner.
+    color_w = 60
+    color_margin = 24
+    _buttons.append(HoldButton(
+        center=(color_margin + color_w // 2, cy),
+        width=color_w, height=button_h,
+        hold_seconds=0.5, on_activate=_cycle_color,
+        icon=_color_icon, shortcut="Ctrl+C+V",
+    ))
     _buttons.append(HoldButton(
         center=centers[0], width=single_w, height=button_h,
         hold_seconds=0.5, on_activate=undo_canvas,
@@ -485,35 +557,37 @@ def correct_image(image, shape):
         # immediately after this returns, so just bail out.
         return
     leftmost, topmost, rightmost, bottommost, center = extremes
+    draw_color = get_draw_color()
 
     # Create a new shape and store its properties
     new_shape = {
         'type': shape,
         'points': [],
         'center': center,
-        'bbox': (leftmost[0], topmost[1], rightmost[0], bottommost[1])  # x1, y1, x2, y2
+        'bbox': (leftmost[0], topmost[1], rightmost[0], bottommost[1]),  # x1, y1, x2, y2
+        'color': draw_color,
     }
-    
+
     if shape == 'circle':
         radius = center[0] - leftmost[0]
-        cv2.circle(permanent_canvas, center, radius, (255, 0, 0), 5)
+        cv2.circle(permanent_canvas, center, radius, draw_color, 5)
         new_shape['points'] = [center, radius]
     elif shape == 'square':
-        cv2.rectangle(permanent_canvas, (leftmost[0], topmost[1]), (rightmost[0], bottommost[1]), (255, 0, 0), 5)
+        cv2.rectangle(permanent_canvas, (leftmost[0], topmost[1]), (rightmost[0], bottommost[1]), draw_color, 5)
         new_shape['points'] = [(leftmost[0], topmost[1]), (rightmost[0], bottommost[1])]
     elif shape == 'triangle':
         if abs(bottommost[1] - min(leftmost[1], rightmost[1])) > abs(topmost[1] - min(leftmost[1], rightmost[1])):
             topmost = bottommost
-        cv2.line(permanent_canvas, leftmost, topmost, (255, 0, 0), 5)
-        cv2.line(permanent_canvas, rightmost, topmost, (255, 0, 0), 5)
-        cv2.line(permanent_canvas, leftmost, rightmost, (255, 0, 0), 5)
+        cv2.line(permanent_canvas, leftmost, topmost, draw_color, 5)
+        cv2.line(permanent_canvas, rightmost, topmost, draw_color, 5)
+        cv2.line(permanent_canvas, leftmost, rightmost, draw_color, 5)
         new_shape['points'] = [leftmost, topmost, rightmost]
     elif shape == 'line':
-        cv2.line(permanent_canvas, leftmost, rightmost, (255, 0, 0), 5)
+        cv2.line(permanent_canvas, leftmost, rightmost, draw_color, 5)
         new_shape['points'] = [leftmost, rightmost]
     elif shape == 'arrow':
         tail, head = find_arrow_endpoints(image)
-        cv2.arrowedLine(permanent_canvas, tail, head, (255, 0, 0), 5, tipLength=0.3)
+        cv2.arrowedLine(permanent_canvas, tail, head, draw_color, 5, tipLength=0.3)
         new_shape['points'] = [tail, head]
 
     # Add shape to our list of shapes
@@ -744,29 +818,30 @@ def redraw_all_shapes():
     # Clear the canvas
     permanent_canvas = np.zeros_like(permanent_canvas)
     
-    # Redraw each shape
+    # Redraw each shape in its original colour.
     for shape in shapes:
+        color = shape.get('color', (255, 0, 0))
         if shape['type'] == 'circle':
             center, radius = shape['points']
-            cv2.circle(permanent_canvas, center, radius, (255, 0, 0), 5)
-            
+            cv2.circle(permanent_canvas, center, radius, color, 5)
+
         elif shape['type'] == 'square':
             (x1, y1), (x2, y2) = shape['points']
-            cv2.rectangle(permanent_canvas, (x1, y1), (x2, y2), (255, 0, 0), 5)
-            
+            cv2.rectangle(permanent_canvas, (x1, y1), (x2, y2), color, 5)
+
         elif shape['type'] == 'triangle':
             p1, p2, p3 = shape['points']
-            cv2.line(permanent_canvas, p1, p2, (255, 0, 0), 5)
-            cv2.line(permanent_canvas, p2, p3, (255, 0, 0), 5)
-            cv2.line(permanent_canvas, p3, p1, (255, 0, 0), 5)
-            
+            cv2.line(permanent_canvas, p1, p2, color, 5)
+            cv2.line(permanent_canvas, p2, p3, color, 5)
+            cv2.line(permanent_canvas, p3, p1, color, 5)
+
         elif shape['type'] == 'line':
             p1, p2 = shape['points']
-            cv2.line(permanent_canvas, p1, p2, (255, 0, 0), 5)
+            cv2.line(permanent_canvas, p1, p2, color, 5)
 
         elif shape['type'] == 'arrow':
             tail, head = shape['points']
-            cv2.arrowedLine(permanent_canvas, tail, head, (255, 0, 0), 5, tipLength=0.3)
+            cv2.arrowedLine(permanent_canvas, tail, head, color, 5, tipLength=0.3)
 
 def process_frame(frame, flip=False):
     global canvas, canvas_dirty, last_time, draw_cooldown_threshold, thickness
@@ -774,6 +849,7 @@ def process_frame(frame, flip=False):
     global tool, selected_shape_idx, is_moving_shape, move_start_pos
     global _frame_counter, _last_results, _last_video_ts_ms
     global _pending_undo, _pending_tool_toggle, _pending_clear_all
+    global _pending_color_cycle
 
     if not init:
         init_state(frame.shape)
@@ -789,6 +865,10 @@ def process_frame(frame, flip=False):
     if _pending_clear_all:
         _pending_clear_all = False
         clear_all()
+
+    if _pending_color_cycle:
+        _pending_color_cycle = False
+        _cycle_color()
 
     tick_delta = time.time() - last_time
     last_time = time.time()
@@ -813,7 +893,7 @@ def process_frame(frame, flip=False):
     if results:
         for hand_landmarks in results:
             # Display hand landmarks
-            #draw_hand_landmarks(frame, hand_landmarks)
+
 
             # Get finger positions
             index_finger_tip = hand_landmarks[INDEX_FINGER_TIP]
@@ -855,9 +935,19 @@ def process_frame(frame, flip=False):
 
                     if drawing:
                         if last_x is not None and last_y is not None:
-                            cv2.line(canvas, (last_x, last_y), (x, y), (255, 0, 0), thickness=thickness)
+                            # Exponential smoothing against the previous
+                            # smoothed point — mediapipe landmarks jitter a
+                            # few pixels per frame, which reads as a shaky
+                            # stroke if fed straight to cv2.line.
+                            a = STROKE_SMOOTH_ALPHA
+                            sx = int(a * x + (1 - a) * last_x)
+                            sy = int(a * y + (1 - a) * last_y)
+                            cv2.line(canvas, (last_x, last_y), (sx, sy),
+                                     get_draw_color(), thickness=thickness)
                             canvas_dirty = True
-                        last_x, last_y = x, y
+                            last_x, last_y = sx, sy
+                        else:
+                            last_x, last_y = x, y
                     else:
                         last_x, last_y = None, None
 
@@ -934,10 +1024,13 @@ def process_frame(frame, flip=False):
             cv2.rectangle(highlight, (x1-10, y1-10), (x2+10, y2+10), (0, 255, 255), 2)
             cv2.addWeighted(highlight, 0.4, frame, 0.6, 0, frame)
 
-    # Add strokes onto the frame at full weight — no darkening (video weight=1),
-    # no per-frame mask scans. Stroke pixels saturate into the video.
-    cv2.addWeighted(frame, 1, permanent_canvas, 1, 0, frame)
-    cv2.addWeighted(frame, 1, canvas, 1, 0, frame)
+    # Overlay strokes onto the frame at STROKE_OPACITY. Uses a mask-based
+    # replace/blend instead of additive cv2.addWeighted so colours stay
+    # true (red strokes look red, not pink). canvas is only scanned when
+    # a stroke is in progress.
+    _overlay_strokes(frame, permanent_canvas, STROKE_OPACITY)
+    if canvas_dirty:
+        _overlay_strokes(frame, canvas, STROKE_OPACITY)
 
     # Render UI to a narrow BGRA strip (alpha preserved until composite
     # so translucent pills blend against the live video). Flip the strip

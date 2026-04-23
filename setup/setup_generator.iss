@@ -1,12 +1,28 @@
+; Defaults — overridden at build time via /D flags from run_inno.py, which
+; reads the live values out of pyproject.toml. Keeping them here means the
+; .iss still works if ISCC is invoked directly.
+#ifndef MyAppName
+  #define MyAppName "Camvas"
+#endif
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0"
+#endif
+#ifndef MyAppPublisher
+  #define MyAppPublisher "Camvas"
+#endif
+#ifndef MyBuildDir
+  #define MyBuildDir "exe.win-amd64-3.12"
+#endif
+
 [Setup]
-AppName=Camvas
-AppVersion=1.0
-DefaultGroupName=Camvas
-AppPublisher=Camvas
-DefaultDirName={pf}\Camvas
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+DefaultGroupName={#MyAppName}
+DefaultDirName={pf}\{#MyAppName}
 SourceDir=..
 OutputDir=build\installer
-OutputBaseFilename=Camvas
+OutputBaseFilename={#MyAppName}-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 SetupIconFile=assets\Camvas.ico
@@ -15,41 +31,40 @@ CloseApplications=force
 
 
 [Files]
-Source: "build\exe.win-amd64-3.14\*"; DestDir: "{app}"; Flags: recursesubdirs
+Source: "build\{#MyBuildDir}\*"; DestDir: "{app}"; Flags: recursesubdirs
 
 [Run]
 Filename: "regsvr32.exe"; Parameters: "/s ""{app}\lib\softcam_python\softcam.dll"""; StatusMsg: "Registering dll..."; Flags: runhidden
-Filename: "{app}\Camvas.exe"; StatusMsg: "Launching Camvas..."; Flags: postinstall
+Filename: "{app}\{#MyAppName}.exe"; StatusMsg: "Launching {#MyAppName}..."; Flags: postinstall
 
 [UninstallRun]
-Filename: "taskkill.exe"; Parameters: "/F /IM Camvas.exe /T"; Flags: runhidden; RunOnceId: "KillCamvas"
+Filename: "taskkill.exe"; Parameters: "/F /IM {#MyAppName}.exe /T"; Flags: runhidden; RunOnceId: "Kill{#MyAppName}"
 Filename: "regsvr32.exe"; Parameters: "/u /s ""{app}\lib\softcam_python\softcam.dll"""; StatusMsg: "Unregistering dll..."; Flags: runhidden
 
 [Tasks]
-Name: "runonstartup"; Description: "Run Camvas on startup"; GroupDescription: "Additional options"; Flags: checkedonce
+Name: "runonstartup"; Description: "Run {#MyAppName} on startup"; GroupDescription: "Additional options"; Flags: checkedonce
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional options"; Flags: unchecked
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\Camvas"; \
-    ValueName: "DisplayName"; ValueType: string; ValueData: "Camvas"
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppName}"; \
+    ValueName: "DisplayName"; ValueType: string; ValueData: "{#MyAppName}"
 
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\Camvas"; \
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppName}"; \
     ValueName: "UninstallString"; ValueType: string; ValueData: "{uninstallexe}"
 
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\Camvas"; \
-    ValueName: "DisplayIcon"; ValueType: string; ValueData: "{app}\app.exe"
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppName}"; \
+    ValueName: "DisplayIcon"; ValueType: string; ValueData: "{app}\{#MyAppName}.exe"
 
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\Camvas"; \
-    ValueName: "DisplayVersion"; ValueType: string; ValueData: "1.0"
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppName}"; \
+    ValueName: "DisplayVersion"; ValueType: string; ValueData: "{#MyAppVersion}"
 
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\Camvas"; \
-    ValueName: "Publisher"; ValueType: string; ValueData: "Camvas"
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppName}"; \
+    ValueName: "Publisher"; ValueType: string; ValueData: "{#MyAppPublisher}"
 
-[Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-    ValueName: "Camvas"; ValueType: string; ValueData: """{app}\Camvas.exe"" --startup"; Tasks: runonstartup
+    ValueName: "{#MyAppName}"; ValueType: string; ValueData: """{app}\{#MyAppName}.exe"" --startup"; Tasks: runonstartup
 
 [Icons]
-Name: "{group}\Camvas"; Filename: "{app}\Camvas.exe"
-Name: "{group}\Uninstall Camvas"; Filename: "{uninstallexe}"; IconFilename: "{app}\Camvas.exe"
-Name: "{userdesktop}\Camvas"; Filename: "{app}\Camvas.exe"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppName}.exe"
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\{#MyAppName}.exe"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppName}.exe"; Tasks: desktopicon

@@ -2,28 +2,36 @@
 requires-python = "==3.12.*"
 name = "Camvas"
 version = "1.0"
+description = "Hand-drawable virtual camera"
+authors = [{ name = "Camvas" }]
 
 [tool.poe.tasks]
-dev = "python app/main.py"
-build = "python setup/cx_build_app.py build_exe"
+dev = "uv run app/main.py"
+build = "uv run setup/cx_build_app.py build_exe"
 
-installer = "python setup/run_inno.py"
+installer = "uv run setup/run_inno.py"
+publish = "uv run setup/publish.py"
 
 release = [
   "build",
   "installer"
 ]
 
-generate_shapes = "python ml/training/shape_generators.py"
-generate_features = "python ml/training/features_labels_generator.py"
+release_and_publish = [
+  "release",
+  "publish"
+]
+
+generate_shapes = "uv run ml/training/shape_generators.py"
+generate_features = "uv run ml/training/features_labels_generator.py"
 
 generate_dataset = [
   "generate_shapes",
   "generate_features"
 ]
 
-train_model = "python ml/training/train.py"
-convert_model = "python ml/training/convert_to_onxx.py"
+train_model = "uv run ml/training/train.py"
+convert_model = "uv run ml/training/convert_to_onnx.py"
 
 train = [
   "train_model",
