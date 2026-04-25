@@ -7,6 +7,8 @@ def status_callback(status):
         VirtualCam.stop_camera()
 
     else:
+        if VirtualCam.cam is not None:
+            return
         import time
         time.sleep(1)
         threading.Thread(
@@ -31,6 +33,9 @@ def on_camera_stopped():
     VirtualCam.stop_camera()
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     if not is_started_from_windows_startup():
 
         import loading_screen

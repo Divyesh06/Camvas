@@ -1,36 +1,149 @@
-import importlib
-from softcam_python import softcam
+import os
 import sys
+import time
+import multiprocessing as mp
+from multiprocessing import shared_memory
+import gc
+import numpy as np
+from softcam_python import softcam
+import camera_worker
+
+FRAME_W = 1920
+FRAME_H = 1080
+SLOT_BYTES = FRAME_W * FRAME_H * 3
+SHM_BYTES = SLOT_BYTES * 2
+GRACE_SECONDS = 20
 
 stop_signal = True
 cam = None
 
-cv2 = None
-frame_processor = None
+worker = None
+shm = None
+slots = None
+latest_idx = None
+frame_available = None
+capture_active = None
+shutdown_event = None
+pending_out = None
+
+placeholder_frame = None
+
+
+def is_frozen():
+    return getattr(sys, 'frozen', False)
 
 
 def stop_camera():
     global stop_signal
     stop_signal = True
 
-def load_modules():
-    global cv2, frame_processor
-    cv2 = importlib.import_module('cv2')
-    frame_processor = importlib.import_module('frame_processor')
+
+def _placeholder_path():
+    if is_frozen():
+        return os.path.join(os.path.dirname(sys.executable), 'Camvas.bmp')
+    return os.path.join('assets', 'Camvas.bmp')
+
+
+def _load_placeholder():
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QImage
+
+    img = QImage(_placeholder_path())
+    if img.isNull():
+        return np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+
+    img = img.convertToFormat(QImage.Format_RGB888)
+    img = img.scaled(FRAME_W, FRAME_H, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    w, h = img.width(), img.height()
+    bpl = img.bytesPerLine()
+    ptr = img.bits()
+    ptr.setsize(bpl * h)
+    raw = np.frombuffer(bytes(ptr), dtype=np.uint8).reshape((h, bpl))
+    rgb = raw[:, :w * 3].reshape((h, w, 3))
+    bgr = rgb[..., ::-1]
+
+    canvas = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+    y0 = (FRAME_H - h) // 2
+    x0 = (FRAME_W - w) // 2
+    canvas[y0:y0 + h, x0:x0 + w] = bgr
+    return canvas
+
+
+def _spawn_worker():
+    global worker, shm, slots, latest_idx, frame_available, capture_active, shutdown_event, pending_out
+
+    shm = shared_memory.SharedMemory(create=True, size=SHM_BYTES)
+    slots = [
+        np.ndarray((FRAME_H, FRAME_W, 3), dtype=np.uint8, buffer=shm.buf, offset=0),
+        np.ndarray((FRAME_H, FRAME_W, 3), dtype=np.uint8, buffer=shm.buf, offset=SLOT_BYTES),
+    ]
+    latest_idx = mp.Value('i', 0)
+    frame_available = mp.Event()
+    capture_active = mp.Event()
+    shutdown_event = mp.Event()
+    if pending_out is None:
+        pending_out = np.empty((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+
+    worker = mp.Process(
+        target=camera_worker.run,
+        args=(shm.name, latest_idx, frame_available, capture_active, shutdown_event),
+        daemon=True,
+    )
+    worker.start()
+
+
+def _kill_worker():
+    global worker, shm, slots, latest_idx, frame_available, capture_active, shutdown_event
+
+    if shutdown_event is not None:
+        shutdown_event.set()
+    if capture_active is not None:
+        capture_active.set()  # unblock worker if it's idling
+
+    if worker is not None:
+        worker.join(timeout=2)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=1)
+            if worker.is_alive():
+                worker.kill()
+                worker.join()
+
+    if shm is not None:
+        slots = None
+        try:
+            shm.close()
+            shm.unlink()
+        except Exception:
+            pass
+
+    worker = None
+    shm = None
+    slots = None
+    latest_idx = None
+    frame_available = None
+    capture_active = None
+    shutdown_event = None
+
+
+def _respawn_worker():
+    _kill_worker()
+    _spawn_worker()
+
 
 def main(started_callback, disconnected_callback=None):
-    global stop_signal, cam, cv2, frame_processor
+    global stop_signal, cam, placeholder_frame
 
     if cam:
         return
 
     stop_signal = False
-    cam = softcam.camera(1920, 1080, 60)
+    cam = softcam.camera(FRAME_W, FRAME_H, 60)
 
-    import time
     while not stop_signal:
         cam.wait_for_connection(timeout=300)
-        time.sleep(1)  # softcam reports connected too early; let is_connected settle
+        time.sleep(1)
         if cam.is_connected():
             break
 
@@ -40,62 +153,83 @@ def main(started_callback, disconnected_callback=None):
         stop_signal = False
         return
 
-    if not cv2 or not frame_processor:
-        load_modules()
+    if placeholder_frame is None:
+        placeholder_frame = _load_placeholder()
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    frame_width = 1920
-    frame_height = 1080
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
-
-    first_time = True
-    needs_resize = False
-
+    _spawn_worker()
+    capture_active.set()
     started_callback()
 
+    seen_real_frame = False
+    grace_deadline = None
+    in_grace = False
+    was_stopped = False
     frame_count = 0
     fps_start = time.time()
 
-    while cam.is_connected() and not stop_signal:
+    try:
+        while not stop_signal:
+            if worker is not None and not worker.is_alive():
+                _respawn_worker()
+                if not in_grace:
+                    capture_active.set()
 
-        ret, frame = cap.read()
+            now = time.time()
+            if cam.is_connected():
+                if in_grace:
+                    time.sleep(1)
+                    if not cam.is_connected():
+                        continue
+                    in_grace = False
+                    grace_deadline = None
+                    if capture_active is not None:
+                        capture_active.set()
+                    if frame_available is not None:
+                        frame_available.clear()
+                    started_callback()
 
-        if first_time:
-            frame_processor.init_state(frame.shape)
-            needs_resize = frame.shape != (frame_height, frame_width, 3)
-            first_time = False
+                if frame_available.wait(timeout=0.05):
+                    frame_available.clear()
+                    np.copyto(pending_out, slots[latest_idx.value])
+                    cam.send_frame(pending_out)
+                    seen_real_frame = True
+                else:
+                    if seen_real_frame:
+                        cam.send_frame(pending_out)
+                    else:
+                        cam.send_frame(placeholder_frame)
 
-        frame = frame_processor.process_frame(frame, False)
+                frame_count += 1
+                elapsed = now - fps_start
+                if elapsed >= 1.0:
+                    print(f"FPS: {frame_count / elapsed:.1f}")
+                    frame_count = 0
+                    fps_start = now
+            else:
+                if not in_grace:
+                    in_grace = True
+                    grace_deadline = now + GRACE_SECONDS
+                    if capture_active is not None:
+                        capture_active.clear()
+                    if disconnected_callback:
+                        disconnected_callback()
 
-        if needs_resize:
-            frame = cv2.resize(frame, (frame_width, frame_height), frame)
+                if now >= grace_deadline:
+                    break
 
-        cam.send_frame(frame)
+                cam.wait_for_connection(timeout=0.5)
 
-        frame_count += 1
-        elapsed = time.time() - fps_start
-        if elapsed >= 1.0:
-            print(f"FPS: {frame_count / elapsed:.1f}")
-            frame_count = 0
-            fps_start = time.time()
-
-    was_stopped = stop_signal
-    cap.release()
-    cam.delete()
-    cam = None
-
-    stop_signal = False
-
-    for mod in ['cv2', 'frame_processor']:
-        if mod in sys.modules:
-            del sys.modules[mod]
+        was_stopped = stop_signal
+    finally:
+        _kill_worker()
+        cam.delete()
+        
+        gc.collect()
+        cam = None
+        stop_signal = False
 
     if disconnected_callback and not was_stopped:
         disconnected_callback()
-
 
 
 if __name__ == "__main__":
