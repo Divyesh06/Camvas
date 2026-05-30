@@ -40,8 +40,8 @@ def stop_camera():
 
 def _placeholder_path():
     if is_frozen():
-        return os.path.join(os.path.dirname(sys.executable), 'Camvas.bmp')
-    return os.path.join('assets', 'Camvas.bmp')
+        return os.path.join(os.path.dirname(sys.executable), 'loading.jpg')
+    return os.path.join('assets', 'loading.jpg')
 
 
 def _load_placeholder():
@@ -67,7 +67,9 @@ def _load_placeholder():
     y0 = (FRAME_H - h) // 2
     x0 = (FRAME_W - w) // 2
     canvas[y0:y0 + h, x0:x0 + w] = bgr
-    return canvas
+    # Pre-mirror so consumer apps' self-view mirror restores readability,
+    # matching how real frames + the UI strip in frame_processor are oriented.
+    return np.ascontiguousarray(canvas[:, ::-1])
 
 
 def _spawn_worker():

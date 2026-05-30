@@ -17,8 +17,8 @@ if not is_frozen():
     hand_model_path = "ml/models/hand_landmarker.task"
 else:
     app_dir = os.path.dirname(sys.executable)
-    model_path = os.path.join(app_dir, 'models', 'ShapeDetection.onnx')
-    hand_model_path = os.path.join(app_dir, 'models', 'hand_landmarker.task')
+    model_path = os.path.join(app_dir, 'ShapeDetection.onnx')
+    hand_model_path = os.path.join(app_dir, 'hand_landmarker.task')
 
 onnx_session = ort.InferenceSession(model_path)
 input_name = onnx_session.get_inputs()[0].name

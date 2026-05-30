@@ -9,7 +9,7 @@ onnx_file = os.path.join('ml', 'models', 'ShapeDetection.onnx')
 icon_path = os.path.join('assets', 'Camvas.ico')
 main_file = os.path.join('app', 'main.py')
 hand_model = os.path.join('ml', 'models', 'hand_landmarker.task')
-placeholder_bmp = os.path.join('assets', 'Camvas.bmp')
+placeholder_img = os.path.join('assets', 'loading.jpg')
 
 # Modify setup to include the .onnx file
 setup(
@@ -24,7 +24,7 @@ setup(
                 onnx_file,
                 hand_model,
                 icon_path,
-                placeholder_bmp,
+                placeholder_img,
             ]
         }
     },
